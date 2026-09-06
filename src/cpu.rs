@@ -1,12 +1,13 @@
 #![allow(unused, clippy::cast_possible_truncation)]
 use crate::Registers;
-use std::sync::{Arc, Mutex};
+use std::fmt::Display;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::Arc;
 use std::thread::{sleep, spawn};
 use std::time::Duration;
-use std::fmt::Display;
 
 #[derive(Debug, Clone, Copy)]
-struct InstructionInfo {
+pub struct InstructionInfo {
     nibble1: u8,
     x: u8,
     y: u8,
@@ -32,8 +33,8 @@ pub struct Cpu {
     pub pc: u16,
     pub stack: [u16; Self::STACK_SIZE],
     pub sp: u8,
-    pub delay_timer: Arc<Mutex<u8>>,
-    pub sound_timer: Arc<Mutex<u8>>,
+    pub delay_timer: Arc<AtomicU8>,
+    pub sound_timer: Arc<AtomicU8>,
     pub keypad: [bool; 16],
     pub display: [bool; Self::DISPLAY_SIZE],
 }
@@ -82,8 +83,8 @@ impl Cpu {
             pc: 0x200,
             stack: [0u16; Self::STACK_SIZE],
             sp: 16,
-            delay_timer: Arc::new(Mutex::new(0)),
-            sound_timer: Arc::new(Mutex::new(0)),
+            delay_timer: Arc::new(AtomicU8::new(0)),
+            sound_timer: Arc::new(AtomicU8::new(0)),
             keypad: [false; 16],
             display: [false; Self::DISPLAY_SIZE],
         };
@@ -92,12 +93,9 @@ impl Cpu {
         let delay_timer_clone = cpu.delay_timer.clone();
         spawn(move || {
             loop {
-                {
-                    let mut delay_timer = delay_timer_clone.lock().unwrap();
-                    if *delay_timer > 0 {
-                        *delay_timer -= 1;
-                    }
-                }
+                let _ = delay_timer_clone.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                    v.checked_sub(1)
+                });
                 sleep(Duration::from_millis(16));
             }
         });
@@ -105,13 +103,10 @@ impl Cpu {
         let sound_timer_clone = cpu.sound_timer.clone();
         spawn(move || {
             loop {
-                {
-                    let mut sound_timer = sound_timer_clone.lock().unwrap();
-                    if *sound_timer > 0 {
-                        *sound_timer -= 1;
-                        // beeping is not implmented at the moment, dont know an easy way to do it
-                    }
-                }
+                let _ = sound_timer_clone.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                    v.checked_sub(1)
+                });
+                // beeping is not implmented at the moment, dont know an easy way to do it
                 sleep(Duration::from_millis(16));
             }
         });
@@ -128,7 +123,7 @@ impl Cpu {
         }
     }
 
-    fn fetch_decode(&mut self) -> InstructionInfo {
+    pub fn fetch_decode(&mut self) -> InstructionInfo {
         let res = (self.memory[self.pc as usize], self.memory[self.pc as usize + 1]);
         self.pc += 2;
         let full_opcode = (u16::from(res.0) << 8) | u16::from(res.1);
@@ -205,6 +200,16 @@ impl Cpu {
             }
         }
     }
+
+    pub fn reset(&mut self) {
+        self.pc = 0x200;
+        self.registers = [0u8; 16];
+        self.delay_timer.store(0, Ordering::Relaxed);
+        self.sound_timer.store(0, Ordering::Relaxed);
+        self.index_register = 0;
+        self.stack = [0u16; Self::STACK_SIZE];
+        self.sp = 16;
+    }
 }
 
 impl Display for Cpu {
@@ -222,3 +227,20 @@ impl Display for Cpu {
         Ok(())
     }
 }
+
+// impl Default for Cpu {
+//     fn default() -> Self {
+//         Self {
+//             memory: [0u8; Self::MEMORY_SIZE],
+//             registers: [0u8; 16],
+//             index_register: 0,
+//             pc: 0x200,
+//             stack: [0u16; Self::STACK_SIZE],
+//             sp: 16,
+//             delay_timer: Arc::new(Mutex::new(0)),
+//             sound_timer: Arc::new(Mutex::new(0)),
+//             keypad: [false; 16],
+//             display: [false; Self::DISPLAY_SIZE],
+//         }
+//     }
+// }

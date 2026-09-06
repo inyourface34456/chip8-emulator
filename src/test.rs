@@ -19,6 +19,7 @@
 //! - `8xy5` / `8xy7` set `VF = 1` when there is no borrow (`minuend >= subtrahend`),
 //!   including equality — Cowgod wrote `>`; VIP / two's-complement borrow does not
 
+use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -103,8 +104,8 @@ mod machine {
         assert_eq!(cpu.registers, [0; 16]);
         assert_eq!(cpu.keypad, [false; 16]);
         assert!(cpu.display.iter().all(|p| !*p));
-        assert_eq!(*cpu.delay_timer.lock().unwrap(), 0);
-        assert_eq!(*cpu.sound_timer.lock().unwrap(), 0);
+        assert_eq!(cpu.delay_timer.load(Ordering::Relaxed), 0);
+        assert_eq!(cpu.sound_timer.load(Ordering::Relaxed), 0);
     }
 
     #[test]
@@ -899,7 +900,7 @@ mod timers {
         let mut cpu = cpu();
         cpu.ld(Registers::V4, 0x2A);
         cpu.lddt(Registers::V4);
-        assert_eq!(*cpu.delay_timer.lock().unwrap(), 0x2A);
+        assert_eq!(cpu.delay_timer.load(Ordering::Relaxed), 0x2A);
         cpu.ld(Registers::V5, 0);
         cpu.rdt(Registers::V5);
         assert_eq!(cpu.registers[Registers::V5], 0x2A);
@@ -910,8 +911,8 @@ mod timers {
         let mut cpu = cpu();
         cpu.ld(Registers::VE, 0x10);
         cpu.ldst(Registers::VE);
-        assert_eq!(*cpu.sound_timer.lock().unwrap(), 0x10);
-        assert_eq!(*cpu.delay_timer.lock().unwrap(), 0);
+        assert_eq!(cpu.sound_timer.load(Ordering::Relaxed), 0x10);
+        assert_eq!(cpu.delay_timer.load(Ordering::Relaxed), 0);
     }
 
     #[test]
@@ -920,13 +921,13 @@ mod timers {
         cpu.ld(Registers::V0, 0);
         cpu.lddt(Registers::V0);
         cpu.ldst(Registers::V0);
-        assert_eq!(*cpu.delay_timer.lock().unwrap(), 0);
-        assert_eq!(*cpu.sound_timer.lock().unwrap(), 0);
+        assert_eq!(cpu.delay_timer.load(Ordering::Relaxed), 0);
+        assert_eq!(cpu.sound_timer.load(Ordering::Relaxed), 0);
         cpu.ld(Registers::V0, 255);
         cpu.lddt(Registers::V0);
         cpu.ldst(Registers::V0);
-        assert_eq!(*cpu.delay_timer.lock().unwrap(), 255);
-        assert_eq!(*cpu.sound_timer.lock().unwrap(), 255);
+        assert_eq!(cpu.delay_timer.load(Ordering::Relaxed), 255);
+        assert_eq!(cpu.sound_timer.load(Ordering::Relaxed), 255);
     }
 
     #[test]
@@ -946,9 +947,9 @@ mod timers {
     #[test]
     fn sound_timer_counts_down_at_60hz_while_nonzero() {
         let cpu = Cpu::init();
-        *cpu.sound_timer.lock().unwrap() = 20;
+        cpu.sound_timer.store(20, Ordering::Relaxed);
         thread::sleep(Duration::from_millis(80));
-        let left = *cpu.sound_timer.lock().unwrap();
+        let left = cpu.sound_timer.load(Ordering::Relaxed);
         assert!(
             left <= 17,
             "ST must decrement ~60 times/sec while > 0; 80ms should drop it by several ticks (got {left})"
@@ -1143,5 +1144,86 @@ mod isolation {
         assert_eq!(cpu.pc, 0x200);
         assert_eq!(cpu.sp, Cpu::init().sp);
         assert_eq!(lit_count(&cpu), 0);
+    }
+}
+
+/// Peak CHIP-8 clock using `Cpu::start()` (the real fetch/decode/execute loop).
+///
+/// The ROM is two nested 8-bit counters of ADD/SNE/JP, then `JP 0xFFF` so
+/// `start` returns (`while pc < 4095`). Run with:
+/// `cargo bench simple_program_clock -- --nocapture`
+mod clock {
+    extern crate test;
+    
+    use std::time::Instant;
+
+    use test::Bencher;
+
+    use super::*;
+
+    /// Exact fetch/execute count of one `start()` run (see `SIMPLE_PROGRAM`).
+    const INSTRUCTIONS_PER_RUN: u32 = 197_633;
+    const RUNS: u32 = 4000;
+
+    /// Nested V0/V1 increment loops, then halt by jumping to 0xFFF.
+    ///
+    /// ```text
+    /// 200: LD V1, 0
+    /// 202: LD V0, 0
+    /// 204: ADD V0, 1
+    /// 206: SNE V0, 0
+    /// 208: JP  20C        ; V0 wrapped
+    /// 20A: JP  204
+    /// 20C: ADD V1, 1
+    /// 20E: SNE V1, 0
+    /// 210: JP  FFF        ; both counters wrapped; start() exits
+    /// 212: JP  202
+    /// ```
+    const SIMPLE_PROGRAM: &[u8] = &[
+        0x61, 0x00, 0x60, 0x00, 0x70, 0x01, 0x40, 0x00, 0x12, 0x0C, 0x12, 0x04, 0x71,
+        0x01, 0x41, 0x00, 0x1F, 0xFF, 0x12, 0x02,
+    ];
+
+    fn bench_cpu() -> Cpu {
+        let mut cpu = Cpu::init();
+        cpu.load_data(SIMPLE_PROGRAM);
+        cpu
+    }
+
+    #[bench]
+    fn simple_program_clock(b: &mut Bencher) {
+        let mut cpu = bench_cpu();
+
+        let start = Instant::now();
+        for _ in 0..RUNS {
+            cpu.reset();
+            cpu.start();
+        }
+        let hz = f64::from(RUNS * INSTRUCTIONS_PER_RUN) / start.elapsed().as_secs_f64();
+        eprintln!(
+            "\nsimple CHIP-8 program max clock on this machine: {hz:.0} Hz ({:.2} MHz)\n",
+            hz / 1_000_000.0
+        );
+
+        b.iter(|| {
+            cpu.reset();
+            cpu.start();
+            test::black_box(cpu.pc)
+        });
+    }
+
+    #[bench]
+    fn fetch_decode(b: &mut Bencher) {
+        let mut opcode = 0;
+        let mut cpu = Cpu::init();
+        unsafe { std::arch::x86_64::_rdrand16_step(&mut opcode); }
+        cpu.memory[cpu.pc as usize] = opcode.to_be_bytes()[0];
+        cpu.memory[cpu.pc as usize + 1] = opcode.to_be_bytes()[1];
+        cpu.pc = 0x200;
+        
+        b.iter(|| {
+            cpu.pc = 0x200;
+            test::black_box(cpu.fetch_decode());
+        });
     }
 }

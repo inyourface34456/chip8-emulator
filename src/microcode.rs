@@ -1,4 +1,6 @@
 #![allow(unused, clippy::cast_possible_truncation)]
+use std::sync::atomic::Ordering;
+
 use crate::{Cpu, Registers};
 
 impl Cpu {
@@ -217,7 +219,7 @@ impl Cpu {
 
     /// opcode fx07
     pub fn rdt(&mut self, reg: Registers) {
-        self.registers[reg] = *self.delay_timer.lock().unwrap();
+        self.registers[reg] = self.delay_timer.load(Ordering::Relaxed);
     }
 
     /// opcode fx0a
@@ -239,12 +241,12 @@ impl Cpu {
 
     /// opcode fx15
     pub fn lddt(&mut self, reg: Registers) {
-        *self.delay_timer.lock().unwrap() = self.registers[reg];
+        self.delay_timer.store(self.registers[reg], Ordering::Relaxed);
     }
 
     /// opcode fx18
     pub fn ldst(&mut self, reg: Registers) {
-        *self.sound_timer.lock().unwrap() = self.registers[reg];
+        self.sound_timer.store(self.registers[reg], Ordering::Relaxed);
     }
 
     /// opcode fx1e
