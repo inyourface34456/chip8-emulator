@@ -5,6 +5,7 @@ impl Cpu {
     /// opcode 00e0
     pub fn cls(&mut self) {
         self.display = [false; Self::DISPLAY_SIZE];
+        print!("{}[2J{self}", 27 as char);
     }
 
     /// opcode 00ee
@@ -197,6 +198,7 @@ impl Cpu {
         if !disabled_px {
             self.registers[Registers::VF] = 0;
         }
+        print!("{}[2J{self}", 27 as char);
     }
 
     /// opcode ex9e

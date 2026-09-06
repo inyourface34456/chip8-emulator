@@ -1,0 +1,1 @@
+None of the test roms are mine, the one that start with a number are from [Timendus](https://github.com/Timendus/chip8-test-suite), and `test_opcode.ch8` is from [corax89](https://github.com/corax89/chip8-test-rom)
