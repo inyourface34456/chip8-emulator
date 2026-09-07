@@ -1,1 +1,3 @@
 None of the test roms are mine, the one that start with a number are from [Timendus](https://github.com/Timendus/chip8-test-suite), and `test_opcode.ch8` is from [corax89](https://github.com/corax89/chip8-test-rom)
+
+I dont have sound suport, and it probly wont be comming any time soon. I dont want to bring in a huge libary just to make some beeping noice, and the same for keyboard suport. I dont want to have to bring in a large crate like crossterm to get that working right. In theroy, ncurses could solve that problem, but that dose not work on windows (as far as i know). If you know of somthing that do those functions without pulling in like 20 extra crates, lmk.
